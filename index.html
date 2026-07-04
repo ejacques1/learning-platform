@@ -61,13 +61,120 @@
     }
     .btn:hover { background: var(--accent-hover); }
     .btn:active { transform: translateY(1px); }
+    /* Plain auth form — to be styled later */
+    .field {
+      display: block;
+      width: 100%;
+      margin-bottom: 0.75rem;
+      padding: 0.6rem 0.75rem;
+      font-size: 1rem;
+      border-radius: 8px;
+      border: 1px solid var(--muted);
+    }
+    .row { display: flex; gap: 0.5rem; }
+    .row .btn { flex: 1; }
+    .msg { min-height: 1.2rem; margin-top: 0.75rem; font-size: 0.9rem; }
+    .msg.error { color: #f87171; }
+    .msg.ok { color: #4ade80; }
+    .hidden { display: none; }
   </style>
 </head>
 <body>
   <main class="card">
     <h1>Welcome to my learning platform</h1>
     <p>A place to learn, grow, and reach your goals — one lesson at a time. We're glad you're here.</p>
-    <button class="btn" onclick="alert('Coming soon!')">Get Started</button>
+
+    <!-- Shown when logged out -->
+    <form id="auth-form">
+      <input class="field" id="email" type="email" placeholder="Email" autocomplete="email" required />
+      <input class="field" id="password" type="password" placeholder="Password" autocomplete="current-password" required />
+      <div class="row">
+        <button class="btn" id="login-btn" type="submit">Log In</button>
+        <button class="btn" id="signup-btn" type="button">Sign Up</button>
+      </div>
+    </form>
+
+    <!-- Shown when logged in -->
+    <div id="account" class="hidden">
+      <p id="welcome"></p>
+      <button class="btn" id="logout-btn" type="button">Log Out</button>
+    </div>
+
+    <div id="msg" class="msg"></div>
   </main>
+
+  <script type="module">
+    import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+    const supabase = createClient(
+      "https://yzwfyxmmjzqivfapratx.supabase.co",
+      "sb_publishable_IoLYxq1UBYlWsT7cbudwQg_3eKnX49u"
+    );
+
+    const authForm = document.getElementById("auth-form");
+    const account = document.getElementById("account");
+    const welcome = document.getElementById("welcome");
+    const msg = document.getElementById("msg");
+    const emailInput = document.getElementById("email");
+    const passwordInput = document.getElementById("password");
+
+    function setMsg(text, kind = "") {
+      msg.textContent = text;
+      msg.className = "msg" + (kind ? " " + kind : "");
+    }
+
+    // Toggle UI based on whether a user is signed in
+    function render(session) {
+      if (session) {
+        authForm.classList.add("hidden");
+        account.classList.remove("hidden");
+        welcome.textContent = `Welcome, ${session.user.email}!`;
+      } else {
+        authForm.classList.remove("hidden");
+        account.classList.add("hidden");
+        welcome.textContent = "";
+      }
+    }
+
+    supabase.auth.onAuthStateChange((_event, session) => render(session));
+
+    // Set the initial UI from any existing session
+    const { data: { session } } = await supabase.auth.getSession();
+    render(session);
+
+    // Log in with email + password
+    authForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      setMsg("Logging in…");
+      const { error } = await supabase.auth.signInWithPassword({
+        email: emailInput.value,
+        password: passwordInput.value,
+      });
+      if (error) setMsg(error.message, "error");
+      else setMsg("");
+    });
+
+    // Sign up with email + password
+    document.getElementById("signup-btn").addEventListener("click", async () => {
+      setMsg("Creating account…");
+      const { data, error } = await supabase.auth.signUp({
+        email: emailInput.value,
+        password: passwordInput.value,
+      });
+      if (error) {
+        setMsg(error.message, "error");
+      } else if (data.session) {
+        setMsg("");
+      } else {
+        setMsg("Check your email to confirm your account.", "ok");
+      }
+    });
+
+    // Log out
+    document.getElementById("logout-btn").addEventListener("click", async () => {
+      await supabase.auth.signOut();
+      setMsg("");
+    });
+  </script>
 </body>
 </html>
