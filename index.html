@@ -142,25 +142,35 @@
     const { data: { session } } = await supabase.auth.getSession();
     render(session);
 
+    // Require both fields before hitting Supabase. Without this, an empty
+    // sign-up is sent as an anonymous sign-in, which is disabled.
+    function credentials() {
+      const email = emailInput.value.trim();
+      const password = passwordInput.value;
+      if (!email || !password) {
+        setMsg("Please enter both an email and a password.", "error");
+        return null;
+      }
+      return { email, password };
+    }
+
     // Log in with email + password
     authForm.addEventListener("submit", async (e) => {
       e.preventDefault();
+      const creds = credentials();
+      if (!creds) return;
       setMsg("Logging in…");
-      const { error } = await supabase.auth.signInWithPassword({
-        email: emailInput.value,
-        password: passwordInput.value,
-      });
+      const { error } = await supabase.auth.signInWithPassword(creds);
       if (error) setMsg(error.message, "error");
       else setMsg("");
     });
 
     // Sign up with email + password
     document.getElementById("signup-btn").addEventListener("click", async () => {
+      const creds = credentials();
+      if (!creds) return;
       setMsg("Creating account…");
-      const { data, error } = await supabase.auth.signUp({
-        email: emailInput.value,
-        password: passwordInput.value,
-      });
+      const { data, error } = await supabase.auth.signUp(creds);
       if (error) {
         setMsg(error.message, "error");
       } else if (data.session) {
