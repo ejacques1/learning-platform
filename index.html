@@ -61,6 +61,16 @@
     }
     .btn:hover { background: var(--accent-hover); }
     .btn:active { transform: translateY(1px); }
+    .btn:disabled { opacity: 0.6; cursor: default; }
+    .btn.secondary {
+      background: transparent;
+      border: 1px solid var(--muted);
+      color: var(--muted);
+      font-weight: 500;
+      padding: 0.5rem 1.25rem;
+      font-size: 0.9rem;
+    }
+    .btn.secondary:hover { background: rgba(255, 255, 255, 0.05); }
     /* Plain auth form — to be styled later */
     .field {
       display: block;
@@ -77,6 +87,22 @@
     .msg.error { color: #f87171; }
     .msg.ok { color: #4ade80; }
     .hidden { display: none; }
+    .divider {
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      margin: 1.75rem 0 1.5rem;
+    }
+    .price { font-size: 0.95rem; margin-bottom: 1.25rem; }
+    .lesson {
+      text-align: left;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 12px;
+      padding: 1rem 1.15rem;
+      margin-bottom: 0.75rem;
+    }
+    .lesson h3 { font-size: 1rem; margin-bottom: 0.35rem; }
+    .lesson p { font-size: 0.9rem; margin-bottom: 0; }
+    .status-line { font-size: 0.85rem; color: var(--muted); margin-bottom: 1rem; }
   </style>
 </head>
 <body>
@@ -85,7 +111,7 @@
     <p>A place to learn, grow, and reach your goals — one lesson at a time. We're glad you're here.</p>
 
     <!-- Shown when logged out -->
-    <form id="auth-form">
+    <form id="auth-form" class="hidden">
       <input class="field" id="email" type="email" placeholder="Email" autocomplete="email" required />
       <input class="field" id="password" type="password" placeholder="Password" autocomplete="current-password" required />
       <div class="row">
@@ -97,7 +123,23 @@
     <!-- Shown when logged in -->
     <div id="account" class="hidden">
       <p id="welcome"></p>
-      <button class="btn" id="logout-btn" type="button">Log Out</button>
+
+      <!-- Subscribe call to action, for users without an active subscription -->
+      <div id="subscribe-panel" class="hidden">
+        <div class="divider"></div>
+        <p class="price">Unlock every lesson for <strong>$28/month</strong>. Cancel anytime.</p>
+        <button class="btn" id="subscribe-btn" type="button">Subscribe</button>
+      </div>
+
+      <!-- Paid content, fetched from the server only for active subscribers -->
+      <div id="paid-content" class="hidden">
+        <div class="divider"></div>
+        <p class="status-line" id="sub-status"></p>
+        <div id="lessons"></div>
+      </div>
+
+      <div class="divider"></div>
+      <button class="btn secondary" id="logout-btn" type="button">Log Out</button>
     </div>
 
     <div id="msg" class="msg"></div>
@@ -106,10 +148,21 @@
   <script type="module">
     import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-    const supabase = createClient(
-      "https://yzwfyxmmjzqivfapratx.supabase.co",
-      "sb_publishable_IoLYxq1UBYlWsT7cbudwQg_3eKnX49u"
-    );
+    // Config comes from the server so no keys are hardcoded here. Only the
+    // publishable Supabase key ever reaches the browser.
+    let supabaseUrl, supabasePublishableKey;
+    try {
+      const configRes = await fetch("/api/config");
+      if (!configRes.ok) throw new Error("Could not load app configuration.");
+      ({ supabaseUrl, supabasePublishableKey } = await configRes.json());
+    } catch (err) {
+      const el = document.getElementById("msg");
+      el.className = "msg error";
+      el.textContent = "This site is not configured yet. Check the server environment variables.";
+      throw err;
+    }
+
+    const supabase = createClient(supabaseUrl, supabasePublishableKey);
 
     const authForm = document.getElementById("auth-form");
     const account = document.getElementById("account");
@@ -117,10 +170,29 @@
     const msg = document.getElementById("msg");
     const emailInput = document.getElementById("email");
     const passwordInput = document.getElementById("password");
+    const subscribePanel = document.getElementById("subscribe-panel");
+    const subscribeBtn = document.getElementById("subscribe-btn");
+    const paidContent = document.getElementById("paid-content");
+    const subStatus = document.getElementById("sub-status");
+    const lessons = document.getElementById("lessons");
 
     function setMsg(text, kind = "") {
       msg.textContent = text;
       msg.className = "msg" + (kind ? " " + kind : "");
+    }
+
+    // Calls an API route with the current Supabase access token attached, which
+    // is how the server identifies the user.
+    async function apiFetch(path, options = {}) {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not logged in.");
+      return fetch(path, {
+        ...options,
+        headers: {
+          ...(options.headers || {}),
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      });
     }
 
     // Toggle UI based on whether a user is signed in
@@ -129,11 +201,69 @@
         authForm.classList.add("hidden");
         account.classList.remove("hidden");
         welcome.textContent = `Welcome, ${session.user.email}!`;
+        refreshSubscription();
       } else {
         authForm.classList.remove("hidden");
         account.classList.add("hidden");
+        subscribePanel.classList.add("hidden");
+        paidContent.classList.add("hidden");
         welcome.textContent = "";
+        lessons.innerHTML = "";
       }
+    }
+
+    // Asks the server whether this user is subscribed, then shows either the
+    // subscribe prompt or the paid lessons.
+    async function refreshSubscription() {
+      try {
+        const res = await apiFetch("/api/subscription-status");
+        if (!res.ok) throw new Error("Could not check your subscription.");
+        const { subscribed, status, cancelAtPeriodEnd, currentPeriodEnd } = await res.json();
+
+        if (subscribed) {
+          subscribePanel.classList.add("hidden");
+          await loadPaidContent(status, cancelAtPeriodEnd, currentPeriodEnd);
+        } else {
+          paidContent.classList.add("hidden");
+          subscribePanel.classList.remove("hidden");
+        }
+      } catch (err) {
+        setMsg(err.message, "error");
+      }
+    }
+
+    async function loadPaidContent(status, cancelAtPeriodEnd, currentPeriodEnd) {
+      const res = await apiFetch("/api/paid-content");
+      if (!res.ok) {
+        // The server is the authority: if it declines, show the subscribe prompt.
+        paidContent.classList.add("hidden");
+        subscribePanel.classList.remove("hidden");
+        return;
+      }
+
+      const { lessons: items } = await res.json();
+      lessons.innerHTML = "";
+      for (const lesson of items) {
+        const el = document.createElement("div");
+        el.className = "lesson";
+        const title = document.createElement("h3");
+        title.textContent = lesson.title;
+        const body = document.createElement("p");
+        body.textContent = lesson.body;
+        el.append(title, body);
+        lessons.append(el);
+      }
+
+      const renews = currentPeriodEnd
+        ? new Date(currentPeriodEnd).toLocaleDateString()
+        : null;
+      subStatus.textContent = cancelAtPeriodEnd && renews
+        ? `Subscription ${status} — ends ${renews}.`
+        : renews
+          ? `Subscription ${status} — renews ${renews}.`
+          : `Subscription ${status}.`;
+
+      paidContent.classList.remove("hidden");
     }
 
     supabase.auth.onAuthStateChange((_event, session) => render(session));
@@ -180,11 +310,46 @@
       }
     });
 
+    // Start Stripe Checkout
+    subscribeBtn.addEventListener("click", async () => {
+      subscribeBtn.disabled = true;
+      setMsg("Redirecting to checkout…");
+      try {
+        const res = await apiFetch("/api/create-checkout-session", { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not start checkout.");
+        window.location.href = data.url;
+      } catch (err) {
+        setMsg(err.message, "error");
+        subscribeBtn.disabled = false;
+      }
+    });
+
     // Log out
     document.getElementById("logout-btn").addEventListener("click", async () => {
       await supabase.auth.signOut();
       setMsg("");
     });
+
+    // Handle the return trip from Stripe Checkout. Access is granted by the
+    // webhook, not by this redirect, so a success here may briefly precede it.
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("checkout") === "success") {
+      setMsg("Payment received — setting up your access…", "ok");
+      window.history.replaceState({}, "", window.location.pathname);
+      // The webhook usually lands within a second or two; re-check a few times.
+      for (let i = 0; i < 5; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        await refreshSubscription();
+        if (!paidContent.classList.contains("hidden")) {
+          setMsg("You're subscribed. Enjoy the lessons!", "ok");
+          break;
+        }
+      }
+    } else if (params.get("checkout") === "cancelled") {
+      setMsg("Checkout cancelled — you have not been charged.");
+      window.history.replaceState({}, "", window.location.pathname);
+    }
   </script>
 </body>
 </html>

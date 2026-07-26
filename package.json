@@ -1,0 +1,11 @@
+{
+  "name": "learning-platform",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Early Scholars learning platform — static frontend with Vercel serverless functions for Stripe subscriptions.",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.110.8",
+    "stripe": "^22.3.2"
+  }
+}

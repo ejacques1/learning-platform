@@ -1,0 +1,7 @@
+node_modules/
+.vercel/
+
+# Environment files — these hold secret keys and must never be committed.
+.env
+.env.*
+!.env.example
